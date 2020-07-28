@@ -55,16 +55,16 @@ class Zeus2Polaris:
 			# rescale by the dust-to-gas mass ratio
 			self.field *= self.dust_gas_mass_ratio
 
+		# If magnetic field component
+		if ID in [4, 5, 6]:
+			# Convert from Lorentz-Heaviside to Gaussian (CGS) unit system
+			self.field *= np.sqrt(4*np.pi)
+
 		# If velocity field component
 		if ID in [7, 8, 9]:
 			# Set null velocities to a low value to avoid problems within polaris
 			minvel =  1e-5
 			self.field = np.where(self.field != 0.0, self.field, minvel)
-
-		# If magnetic field component
-		if ID in [4, 5, 6]:
-			# Convert from Lorentz-Heaviside to Gaussian (CGS) unit system
-			self.field *= np.sqrt(4*np.pi)
 
 		# Add the current field to the list of fields to be written
 		self.fields.append(self.field)
@@ -74,12 +74,9 @@ class Zeus2Polaris:
 
 		self._print(f'Setting cell edges')
 		# Read grid cell edges
-		self.r_e = self._read_data("z_x1ap", trim_ghosts=self.nghost)
-		self.th_e = self._read_data("z_x2ap", trim_ghosts=self.nghost)
-		self.ph_e = self._read_data("z_x3ap", trim_ghosts=self.nghost)
-		self.r_c = self._read_data("z_x1bp", trim_ghosts=self.nghost)
-		self.th_c = self._read_data("z_x2bp", trim_ghosts=self.nghost)
-		self.ph_c = self._read_data("z_x3bp", trim_ghosts=self.nghost)
+		self.r_e = self._read_data(r, trim_ghosts=self.nghost)
+		self.th_e = self._read_data(theta, trim_ghosts=self.nghost)
+		self.ph_e = self._read_data(phi, trim_ghosts=self.nghost)
 
 		# Grid Dimension
 		self.dr = np.diff(self.r_e)
@@ -170,6 +167,7 @@ class Zeus2Polaris:
 		# 		"d": format string for double
 		self._write_data("H", self.id_grid, endl=True)
 		self._write_data("H", len(self.IDs), endl=True)
+		print(f'len(self.IDs): {len(self.IDs)}')
 
 		# Write the IDs of phys. quantities
 		[self._write_data("H", i, endl=True) for i in self.IDs]
@@ -210,8 +208,8 @@ class Zeus2Polaris:
 				self._write_data("d", field[cell], endl=True if j+1 == len(self.IDs) else False)
 
 		# Set the central cell to zero in all quantities.
-		self._write_data("d", 0)
-		self._write_data("d", 0, endl=True)
+		for (j, field) in enumerate(self.fields):
+			self._write_data("d", 0, endl=True if j+1 == len(self.IDs) else False)
 		
 		self.file_.close()	
 		
@@ -234,10 +232,10 @@ if __name__ == "__main__":
 						help='Name of the output grid. It will suffixed by the frame number')
 
 	parser.add_argument('-f', '--format', action='store', choices=['binary','ascii'], default='binary', \
-						help='Format of the output grid. POLARIS uses binary but ascii allows to check it.')
+						help='Format of the output grid. POLARIS uses binary but ascii is useful to check the grid.')
 
 	parser.add_argument('--constant-density', action='store', type=float, default=0, \
-						help='Option to create a constant density grid replacing the input structure by a given number.')
+						help='Option to create a constant density grid by replacing the density field with a given number and keeping the grid structure.')
 
 	parser.add_argument('--no-progress-bar', action='store_true', \
 						help='Disables the printing of a progress bar to standard output in verbose mode.')
@@ -268,12 +266,12 @@ if __name__ == "__main__":
 	# Add quantities to include in the output grid.
 	grid.add_quantity(ID=28, infile='o_d__', name='gass mass density')
 	grid.add_quantity(ID=29, infile='o_d__', name='dust mass density')
-	#grid.add_quantity(ID=4, infile='o_b1_', name='magnetic field in x-direction')
-	#grid.add_quantity(ID=5, infile='o_b2_', name='magnetic field in y-direction')
-	#grid.add_quantity(ID=6, infile='o_b3_', name='magnetic field in z-direction')
-	#grid.add_quantity(ID=7, infile='o_v1_', name='gas velocity in x-direction') 
-	#grid.add_quantity(ID=8, infile='o_v2_', name='gas velocity in y-direction') 
-	#grid.add_quantity(ID=9, infile='o_v3_', name='gas velocity in z-direction') 
+	grid.add_quantity(ID=4, infile='o_b1_', name='magnetic field in x-direction')
+	grid.add_quantity(ID=5, infile='o_b2_', name='magnetic field in y-direction')
+	grid.add_quantity(ID=6, infile='o_b3_', name='magnetic field in z-direction')
+	grid.add_quantity(ID=7, infile='o_v1_', name='gas velocity in x-direction') 
+	grid.add_quantity(ID=8, infile='o_v2_', name='gas velocity in y-direction') 
+	grid.add_quantity(ID=9, infile='o_v3_', name='gas velocity in z-direction') 
 
 	# Enable/disable the usage of a progress bar
 	grid.no_pb = cli.no_progress_bar
