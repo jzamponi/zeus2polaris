@@ -167,7 +167,6 @@ class Zeus2Polaris:
 		# 		"d": format string for double
 		self._write_data("H", self.id_grid, endl=True)
 		self._write_data("H", len(self.IDs), endl=True)
-		print(f'len(self.IDs): {len(self.IDs)}')
 
 		# Write the IDs of phys. quantities
 		[self._write_data("H", i, endl=True) for i in self.IDs]
