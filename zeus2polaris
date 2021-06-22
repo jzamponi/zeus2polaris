@@ -16,12 +16,28 @@ class Zeus2Polaris:
 		self.nframe = str(nframe).zfill(5)
 		self.output_grid = output_grid
 		self.verbose = verbose
+		self.ID = None
 		self.fields = dict()
 		self.nghost = 0
 		self.id_grid = 30
 		self.dust_gas_mass_ratio = 0.01
 		self.mu = 2.36
 		self.m_H = c.m_p.cgs.value
+		self.rho_g = None
+		self.rho_d = None
+		self.Tgas = None
+		self.Br = None
+		self.Bth = None
+		self.Bph = None
+		self.Vr = None
+		self.Vth = None
+		self.Vph = None
+		self.Bx = None
+		self.By = None
+		self.Bz = None
+		self.Vx = None
+		self.Vy = None
+		self.Vz = None
 		self._print(f'Creating spherical polaris grid for frame: {self.nframe}')
 
 	def _print(self, string):
@@ -29,78 +45,138 @@ class Zeus2Polaris:
 		if self.verbose:
 			print(f'[{self.__class__.__name__}] {string}')
 
-	def add_quantity(self, ID, infile='', value=None, name=''):
+	def add_quantity(self, ID, ftype='scalar', infile='', value=None, name=''):
 		"""Add a quantity to the list of quantities to be written into 
 			the polaris grid."""
 
-		self._print(f'Adding field: {name}')
+		self._print(f'Adding field with ID {ID}: {name}')
+		self.field_type = ftype
+		self.ID = ID
 
-		# Read physical quantity
+		# Read physical quantity. After _read_data(), fields are (r, phi, theta).
 		if infile == '':
 			self.field = np.zeros(self.fields[28].shape)
 		else:
-			self.field = self._read_data(f"{infile}{self.nframe}", trim_ghosts=self.nghost, shape=self.shape)
+			self.field = self._read_data(f"{infile}{self.nframe}", trim_ghosts=True, shape=self.shape)
 
 		# If gas density
-		if ID in [28]:
+		if ID in [28] and ftype == 'scalar':
+			self.rho_g = self.field
 			# Check if constant density is desired
 			if self.constant_density > 0:
 				self._print(f'Setting gas density to a constant value: {self.constant_density} (g/cm^-3)')
 				self.field = np.full(self.field.shape, self.constant_density)
 
 		# If dust density
-		if ID in [1, 29]:
+		if ID in [1, 29] and ftype == 'scalar':
+			# Rescale gas density by the dust-to-gas mass ratio
+			self.rho_d = self.field * self.dust_gas_mass_ratio
+
 			# Check if constant density is desired
 			if self.constant_density > 0:
 				rescaled_const_dens = self.constant_density * self.dust_gas_mass_ratio
 				self._print(f'Setting dust density to a constant value: {rescaled_const_dens} (g/cm^-3)')
 				self.field = np.full(self.field.shape, rescaled_const_dens)
 
-			# Rescale by the dust-to-gas mass ratio
-			self.field *= self.dust_gas_mass_ratio
-
 		# If gas | dust temperature
-		if ID in [2,3]:
+		if ID in [2,3] and ftype == 'scalar':
 			# Derive the gas temperature using an adiabatic equation of state
-			rho = self.fields[28]
+			# src: Appendix from Zhao et al. (2018)
 			rho_cr = 1e-13 
 			csound = 1.88e4
 			T0 = csound**2 * self.mu * self.m_H / c.k_B.cgs.value
-			T1 = T0 + 1.5*rho/rho_cr
-			T2 = np.where(rho >= 10*rho_cr, (T0+15) * (rho/rho_cr/10)**0.6, T1)
-			T3 = np.where(rho >= 100*rho_cr, 10**0.6 * (T0+15) * (rho/rho_cr/100)**0.44, T2)
+			T1 = T0 + 1.5*self.rho_g/rho_cr
+			T2 = np.where(self.rho_g >= 10*rho_cr, (T0+15) * (self.rho_g/rho_cr/10)**0.6, T1)
+			T3 = np.where(self.rho_g >= 100*rho_cr, 10**0.6 * (T0+15) * (self.rho_g/rho_cr/100)**0.44, T2)
 			self.field = T3
+			self.Tgas = self.field
 	
 		# If magnetic field component
-		if ID in [4, 5, 6]:
+		if ID in [4, 5, 6] and ftype == 'vector':
 			# Convert from Lorentz-Heaviside to Gaussian (CGS) unit system
 			self.field *= np.sqrt(4*np.pi)
+            
+			# Store the B field components in the object. 
+			# Data from zeusTW comes as (r, theta, phi).
+			if ID == 4:
+				self.Br = self.field
+			elif ID == 5:
+				self.Bth = self.field
+			elif ID == 6:
+				self.Bph = self.field
+
+			# Convert from spherical to cartesian after all components are loaded
+			if ID == 6:
+				# Create a coordinate grid. B Field is now in (r, phi, theta) for polaris.
+				r, ph, th = np.meshgrid(self.r_e, self.ph_e, self.th_e, indexing='ij')
+				r = r.ravel()
+				ph = ph.ravel()
+				th = th.ravel()
+
+				# Transform spherical vector components to cartesian
+				self.Bx = self.Br * np.sin(th) * np.cos(ph) + self.Bth * np.cos(th) * np.cos(ph) - self.Bph * np.sin(ph)	
+				self.By = self.Br * np.sin(th) * np.sin(ph) + self.Bth * np.cos(th) * np.sin(ph) + self.Bph * np.cos(ph)
+				self.Bz = self.Br * np.cos(th) - self.Bth * np.sin(th)
 
 		# If velocity field component
-		if ID in [7, 8, 9]:
+		if ID in [7, 8, 9] and ftype == 'vector':
 			# Set null velocities to a low value to avoid problems within polaris
 			minvel =  1e-5
 			self.field = np.where(self.field != 0.0, self.field, minvel)
 
-		# Define a different dust mixture ID for the disk and the envelope
+			# Store the V field components in the object. 
+			# Data from zeusTW comes as (r, theta, phi).
+			if ID == 7:
+				self.Vr = self.field
+			elif ID == 8:
+				self.Vth = self.field
+			elif ID == 9:
+				self.Vph = self.field
+
+			# Convert from spherical to cartesian after all components are loaded
+			if ID == 9:
+				# Create a coordinate grid. B Field is now in (r, phi, theta) for polaris.
+				r, ph, th = np.meshgrid(self.r_e, self.ph_e, self.th_e, indexing='ij')
+				r = r.ravel()
+				ph = ph.ravel()
+				th = th.ravel()
+
+				# Transform spherical vector components to cartesian
+				self.Vx = self.Vr * np.sin(th) * np.cos(ph) + self.Vth * np.cos(th) * np.cos(ph) - self.Vph * np.sin(ph)	
+				self.Vy = self.Vr * np.sin(th) * np.sin(ph) + self.Vth * np.cos(th) * np.sin(ph) + self.Vph * np.cos(ph)
+				self.Vz = self.Vr * np.cos(th) - self.Vth * np.sin(th)
+			
+		# Assign a different dust composition ID to the disk and the envelope
 		if ID in [21]:
-			in_disk = (self.fields[28] > 1e-13) &\
-					 (np.abs(self.fields[7]) < 0.5*np.abs(self.fields[9])) 
+			in_disk = (self.rho_g > 1e-13) & (np.abs(self.Vr) < 0.5*np.abs(self.Vph)) 
 
 			self.field = np.where(in_disk, 1, 2)
 
-		# Add the current field to the list of fields to be written
-		self.fields[ID] = self.field
+		# Finally, add the current field to the list of fields to be written
+		if ftype == 'scalar':
+			self.fields[ID] = self.field
+
+		elif ftype == 'vector':
+			if ID == 6:
+				self.fields[4] = self.Bx 
+				self.fields[5] = self.By 
+				self.fields[6] = self.Bz 
+
+			if ID == 9:
+				self.fields[7] = self.Vx  
+				self.fields[8] = self.Vy 
+				self.fields[9] = self.Vz 
 
 	
 	def set_cell_edges(self, r, theta, phi):
 		"""Set the cell edges to be written into the head of the grid."""
 
 		self._print(f'Setting cell edges')
+		self.field_type = 'coords'
 		# Read grid cell edges
-		self.r_e = self._read_data(r, trim_ghosts=self.nghost)
-		self.th_e = self._read_data(theta, trim_ghosts=self.nghost)
-		self.ph_e = self._read_data(phi, trim_ghosts=self.nghost)
+		self.r_e = self._read_data(r, trim_ghosts=True)
+		self.th_e = self._read_data(theta, trim_ghosts=True)
+		self.ph_e = self._read_data(phi, trim_ghosts=True)
 
 		# Grid Dimension
 		self.dr = np.diff(self.r_e)
@@ -113,6 +189,9 @@ class Zeus2Polaris:
 		self.shape = (self.n_r+2*self.nghost, \
 					self.n_ph+2*self.nghost, \
 					self.n_th+2*self.nghost)
+	
+	def set_nghost(self, nghost):
+		self.nghost = nghost
 
 	def set_fr(self, fr):
 		self.f_r = fr
@@ -123,7 +202,7 @@ class Zeus2Polaris:
 	def set_ftheta(self, ftheta):
 		self.f_th = ftheta
 
-	def _read_data(self, filename, shape=None, unshape=True, trim_ghosts=None, entries=-1):
+	def _read_data(self, filename, shape=None, flatten=True, trim_ghosts=False, entries=-1):
 		"""Read data from the zeusTW files. """
 		# Check file existence
 		if not os.path.isfile(filename):
@@ -133,21 +212,40 @@ class Zeus2Polaris:
 		with open(filename, 'rb') as binfile:
 			self.data = np.fromfile(file=binfile, dtype=np.double, count=entries)	
 
-			# Trim ghost cells if required
-			if trim_ghosts is not None:
-				trim_ghosts = int(trim_ghosts)
+			# Trim the edges of each dimension (ghost cells), if required
+			if trim_ghosts:
+				ng = int(self.nghost)
 				if shape is not None:
 					self.data = self.data.reshape(shape, order='F')
 
-					self.data = self.data[trim_ghosts:-trim_ghosts,\
-										trim_ghosts:-trim_ghosts,\
-										trim_ghosts:-trim_ghosts]
-				else:
-					self.data = self.data[trim_ghosts:-trim_ghosts]
+				if self.field_type == 'scalar':
+					# Turn to 3D and trim each dimension
+					self.data = self.data[ng:-ng, ng:-ng, ng:-ng]
+
+				elif self.field_type == 'vector':
+					# Trim ghost in r
+					if self.ID in [4, 7]:
+						self.data = 0.5 * \
+								(self.data[ng:-ng, ng:-ng, ng:-ng]
+							   + self.data[ng+1:-ng+1, ng:-ng, ng:-ng])
+					# Trim ghost in theta
+					if self.ID in [5, 8]:
+						self.data = 0.5 * \
+								(self.data[ng:-ng, ng:-ng, ng:-ng]
+							   + self.data[ng:-ng, ng+1:-ng+1, ng:-ng])
+					# Trim ghost in phi
+					if self.ID in [6, 9]:
+						self.data = 0.5 * \
+								(self.data[ng:-ng, ng:-ng, ng:-ng]
+							   + self.data[ng:-ng, ng:-ng, ng+1:-ng+1])
+				elif self.field_type == 'coords':
+					self.data = self.data[ng:-ng]
 
 			# Turn back to 1D
-			if unshape:
+			if flatten:
 				if self.data.ndim > 1:
+					# Swap theta and phi because:  
+					# zeusTW (r, theta, phi) --> Polaris (r, phi, theta)
 					self.data = np.swapaxes(self.data, 1, 2)
 
 				self.data = np.ravel(self.data)
@@ -205,25 +303,29 @@ class Zeus2Polaris:
 		self._write_data("d", self.r_e[0])
 		self._write_data("d", self._read_data('z_x1ap')[-self.nghost] , endl=True)
 		self._write_data("H", self.n_r)
-		self._write_data("H", self.n_th)
-		self._write_data("H", self.n_ph, endl=True)
+		self._write_data("H", self.n_ph)
+		self._write_data("H", self.n_th, endl=True)
 
 		# Write the shape parameters f_r, f_theta and f_phi 
 		self._write_data("d", self.f_r, endl=True)   
-		self._write_data("d", self.f_ph, endl=True)  
 		self._write_data("d", self.f_th, endl=True)  
+		self._write_data("d", self.f_ph, endl=True)  
 
-		# Write the cell borders in the r, phi and theta direction
+		# For the cell borders, Polaris reads r, phi, theta, 
+		# with 0 < r < inf, 0 < phi < 2pi, 0 < theta < pi 
+		# Write the cell borders in r
 		for r in self.r_e[1:]:
 			self._write_data("d", r)	
 		if self.format_ == 'ascii':
 			self._write_data("d", '', endl=True)
 
+		# Write the cell borders in phi
 		for phi in self.ph_e[1:]:
 			self._write_data("d", phi)
 		if self.format_ == 'ascii':
 			self._write_data("d", '', endl=True)
 
+		# Write the cell borders in theta
 		for theta in self.th_e[1:]:
 			self._write_data("d", theta)	
 		if self.format_ == 'ascii':
@@ -276,7 +378,7 @@ if __name__ == "__main__":
 	grid = Zeus2Polaris(nframe=cli.nframe, output_grid=cli.output, verbose=cli.verbose)
 	
 	# Set the number of ghost cells
-	grid.nghost = 3
+	grid.set_nghost(3)
 
 	# Set the files containing the cell edges
 	grid.set_cell_edges(r='z_x1ap', theta='z_x2ap', phi='z_x3ap')
@@ -292,16 +394,16 @@ if __name__ == "__main__":
 	grid.constant_density = cli.constant_density
 
 	# Add quantities to include in the output grid.
-	grid.add_quantity(ID=28, infile='o_d__', name='gass mass density')
-	grid.add_quantity(ID=29, infile='o_d__', name='dust mass density')
-	grid.add_quantity(ID=2, infile='', name='dust temperature')
-	grid.add_quantity(ID=3, infile='', name='gas temperature')
-	grid.add_quantity(ID=4, infile='o_b1_', name='magnetic field in x-direction')
-	grid.add_quantity(ID=5, infile='o_b2_', name='magnetic field in y-direction')
-	grid.add_quantity(ID=6, infile='o_b3_', name='magnetic field in z-direction')
-	grid.add_quantity(ID=7, infile='o_v1_', name='gas velocity in x-direction') 
-	grid.add_quantity(ID=8, infile='o_v2_', name='gas velocity in y-direction') 
-	grid.add_quantity(ID=9, infile='o_v3_', name='gas velocity in z-direction') 
+	grid.add_quantity(ID=28, ftype='scalar', infile='o_d__', name='gass mass density')
+	grid.add_quantity(ID=29, ftype='scalar', infile='o_d__', name='dust mass density')
+	grid.add_quantity(ID=2, ftype='scalar', infile='', name='dust temperature')
+	grid.add_quantity(ID=3, ftype='scalar', infile='', name='gas temperature')
+	grid.add_quantity(ID=4, ftype='vector', infile='o_b1_', name='magnetic field in r')
+	grid.add_quantity(ID=5, ftype='vector', infile='o_b2_', name='magnetic field in theta')
+	grid.add_quantity(ID=6, ftype='vector', infile='o_b3_', name='magnetic field in phi')
+	grid.add_quantity(ID=7, ftype='vector', infile='o_v1_', name='gas velocity in r') 
+	grid.add_quantity(ID=8, ftype='vector', infile='o_v2_', name='gas velocity in theta') 
+	grid.add_quantity(ID=9, ftype='vector', infile='o_v3_', name='gas velocity in phi') 
 
 	# Enable/disable the usage of a progress bar
 	grid.no_pb = cli.no_progress_bar
