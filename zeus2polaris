@@ -20,7 +20,7 @@ class Zeus2Polaris:
 		self.fields = dict()
 		self.nghost = 0
 		self.id_grid = 30
-		self.dust_gas_mass_ratio = 0.01
+		self.gas2dust = 100
 		self.mu = 2.36
 		self.m_H = c.m_p.cgs.value
 		self.rho_g = None
@@ -47,7 +47,8 @@ class Zeus2Polaris:
 
 	def add_quantity(self, ID, ftype='scalar', infile='', value=None, name=''):
 		"""Add a quantity to the list of quantities to be written into 
-			the polaris grid."""
+			the polaris grid.
+        """
 
 		self._print(f'Adding field with ID {ID}: {name}')
 		self.field_type = ftype
@@ -55,13 +56,14 @@ class Zeus2Polaris:
 
 		# Read physical quantity. After _read_data(), fields are (r, phi, theta).
 		if infile == '':
-			self.field = np.zeros(self.fields[28].shape)
+			self.field = np.zeros(self.rho_g.shape)
 		else:
 			self.field = self._read_data(f"{infile}{self.nframe}", trim_ghosts=True, shape=self.shape)
 
 		# If gas density
 		if ID in [28] and ftype == 'scalar':
 			self.rho_g = self.field
+            
 			# Check if constant density is desired
 			if self.constant_density > 0:
 				self._print(f'Setting gas density to a constant value: {self.constant_density} (g/cm^-3)')
@@ -70,11 +72,12 @@ class Zeus2Polaris:
 		# If dust density
 		if ID in [1, 29] and ftype == 'scalar':
 			# Rescale gas density by the dust-to-gas mass ratio
-			self.rho_d = self.field * self.dust_gas_mass_ratio
+			self.field = self.rho_g / self.gas2dust
+			self.rho_d = self.rho_g / self.gas2dust
 
 			# Check if constant density is desired
 			if self.constant_density > 0:
-				rescaled_const_dens = self.constant_density * self.dust_gas_mass_ratio
+				rescaled_const_dens = self.constant_density * self.gas2dust
 				self._print(f'Setting dust density to a constant value: {rescaled_const_dens} (g/cm^-3)')
 				self.field = np.full(self.field.shape, rescaled_const_dens)
 
@@ -149,13 +152,12 @@ class Zeus2Polaris:
 		# Assign a different dust composition ID to the disk and the envelope
 		if ID in [21]:
 			in_disk = (self.rho_g > 1e-13) & (np.abs(self.Vr) < 0.5*np.abs(self.Vph)) 
-
 			self.field = np.where(in_disk, 1, 2)
 
 		# Finally, add the current field to the list of fields to be written
 		if ftype == 'scalar':
 			self.fields[ID] = self.field
-
+            
 		elif ftype == 'vector':
 			if ID == 6:
 				self.fields[4] = self.Bx 
@@ -388,7 +390,8 @@ if __name__ == "__main__":
 	grid.set_fphi(0)
 	grid.set_ftheta(0)
 
-	grid.dust_gas_mass_ratio = 0.01
+    # Define the gas-to-dust mass ratio
+	grid.gas2dust = 100
 	
 	# Set constant density property if it was entered
 	grid.constant_density = cli.constant_density
@@ -404,6 +407,7 @@ if __name__ == "__main__":
 	grid.add_quantity(ID=7, ftype='vector', infile='o_v1_', name='gas velocity in r') 
 	grid.add_quantity(ID=8, ftype='vector', infile='o_v2_', name='gas velocity in theta') 
 	grid.add_quantity(ID=9, ftype='vector', infile='o_v3_', name='gas velocity in phi') 
+	grid.add_quantity(ID=21, ftype='scalar', infile='', name='dust component ID') 
 
 	# Enable/disable the usage of a progress bar
 	grid.no_pb = cli.no_progress_bar
